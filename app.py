@@ -35,7 +35,6 @@ max_videos = st.slider("कितने वीडियो की गहरा�
 
 def get_any_transcript(video_id):
     try:
-        # किसी भी उपलब्ध भाषा (Auto-generated सहित) के सबटाइटल्स निकालना
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         for transcript in transcript_list:
             data = transcript.fetch()
@@ -55,7 +54,6 @@ if st.button("🔍 0% से 100% जांच करें और वीडि�
                 genai.configure(api_key=gemini_api_key)
                 model = genai.GenerativeModel('gemini-3.5-flash-lite')
                 
-                # यूज़र की हिंदी बात को YouTube के लिए सटीक सर्च कीवर्ड में बदलना
                 kw_prompt = f"Convert this user request into a short 4-5 word YouTube search query (in English or Hinglish for best YouTube results): {query}"
                 search_kw = model.generate_content(kw_prompt).text.strip()
                 
@@ -65,7 +63,6 @@ if st.button("🔍 0% से 100% जांच करें और वीडि�
                 if not video_ids:
                     st.warning("YouTube पर इस टॉपिक से जुड़ा कोई वीडियो नहीं मिला।")
                 else:
-                    # वीडियो का पूरा डिस्क्रिप्शन भी निकालना (ताकि बिना CC वाले वीडियो भी चेक हो सकें)
                     details_response = youtube.videos().list(part='snippet', id=','.join(video_ids)).execute()
                     
                     videos_data = []
@@ -75,20 +72,22 @@ if st.button("🔍 0% से 100% जांच करें और वीडि�
                         video_id = item['id']
                         title = item['snippet']['title']
                         desc = item['snippet']['description']
+                        thumb = item['snippet']['thumbnails']['high']['url']
+                        # सही YouTube लिंक
                         url = f"https://youtube.com{video_id}"
                         
                         transcript = get_any_transcript(video_id)
                         source_type = "पूरी स्क्रिप्ट (CC)" if transcript else "पूरा डिस्क्रिप्शन और डिटेल्स"
                         content_to_check = transcript[:8000] if transcript else desc[:4000]
                         
-                        videos_data.append({"id": idx, "title": title, "url": url, "source": source_type})
+                        videos_data.append({"id": idx, "title": title, "url": url, "source": source_type, "thumb": thumb})
                         batch_text += f"\n--- VIDEO_ID: {idx} | TITLE: {title} | SOURCE: {source_type} ---\nCONTENT: {content_to_check}\n"
                     
                     prompt = f"""
                     तुम एक सख्त Fact-Checker हो। यूज़र की डिमांड यह है: "{query}"
                     नीचे कई YouTube वीडियो की स्क्रिप्ट या डिस्क्रिप्शन दिया गया है। हर वीडियो को 0% से 100% तक जांचो:
                     1. क्या यह वीडियो यूज़र की डिमांड का सही और पूरा समाधान देता है?
-                    2. अगर वीडियो में 'फ्री' बोलकर अंत में क्रेडिट, टोकन, डेली लिमिट, फ्री ट्रायल या पेड प्लान की बात हो, या बताया गया टूल आज की तारीख में पेड हो गया हो, तो उसे तुरंत REJECT कर दो।
+                    2. अगर वीडियो में 'फ्री' बोलकर अंत में क्रेडिट, टोकन, डेली लिमिट, फ्री ट्रायल या पेड प्लान की बात हो, या बताया गया टूल आज की तारीख में पेड हो गया हो, तो उसे REJECT कर दो।
                     3. केवल उन्हीं वीडियो की लिस्ट दो जो 100% PASS हैं, बिल्कुल इस फॉर्मेट में:
                     PASS_ID: [वीडियो का नंबर] | TOOLS: [टूल्स के नाम] | REPORT: [2 लाइन में हिंदी में सच्चाई की रिपोर्ट]
                     अगर कोई भी पास न हो, तो लिखो: NONE
@@ -104,16 +103,18 @@ if st.button("🔍 0% से 100% जांच करें और वीडि�
                         for line in result.split("\n"):
                             if "PASS_ID:" in line:
                                 try:
-                                    vid_num = int(line.split("PASS_ID:")[1].split("|")[0].strip())
-                                    tools = line.split("TOOLS:")[1].split("|")[0].strip()
-                                    report = line.split("REPORT:")[1].strip()
+                                    vid_num = int(line.split("PASS_ID:").split("|").strip())
+                                    tools = line.split("TOOLS:").split("|").strip()
+                                    report = line.split("REPORT:").strip()
                                     v_info = next((v for v in videos_data if v["id"] == vid_num), None)
                                     if v_info:
                                         st.success(f"✅ **100% वेरिफाइड वीडियो:** {v_info['title']}")
+                                        st.image(v_info['thumb'], width=320)
                                         st.caption(f"🔎 जांच का आधार: {v_info['source']}")
                                         st.write(f"🛠️ **बताए गए टूल्स:** {tools}")
                                         st.write(f"📋 **सच्चाई की रिपोर्ट:** {report}")
-                                        st.markdown(f"[👉 यहाँ क्लिक करके वीडियो देखें]({v_info['url']})")
+                                        st.link_button("▶️ YouTube पर वीडियो खोलें", v_info['url'])
+                                        st.code(v_info['url'], language=None)
                                         st.divider()
                                 except Exception:
                                     continue
