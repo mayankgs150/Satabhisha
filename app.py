@@ -13,7 +13,6 @@ with st.sidebar:
     yt_api_key = st.text_input("YouTube Data API Key", type="password")
     gemini_api_key = st.text_input("Gemini API Key", type="password")
 
-# बोलकर सर्च करने का सेक्शन
 st.subheader("🎤 यहाँ क्लिक करके बोलें:")
 voice_text = speech_to_text(
     language='hi-IN',
@@ -23,7 +22,6 @@ voice_text = speech_to_text(
     key='STT'
 )
 
-# अगर यूज़र ने बोला है तो बॉक्स में अपने आप लिखा आ जाएगा
 if voice_text:
     st.session_state['search_query'] = voice_text
 
@@ -42,10 +40,17 @@ def get_transcript(video_id):
     except Exception:
         return None
 
-def strict_verify_video(user_demand, transcript, api_key):
+def get_working_model(api_key):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    
+    for model_name in ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-hydrogen']:
+        try:
+            m = genai.GenerativeModel(model_name)
+            return m
+        except Exception:
+            continue
+    return genai.GenerativeModel('gemini-3.8-flash')
+
+def strict_verify_video(user_demand, transcript, model):
     prompt = f"""
     तुम एक सख्त Fact-Checker हो। यूज़र की डिमांड यह है: "{user_demand}"
     
@@ -71,34 +76,38 @@ if st.button("🔍 0% से 100% जांच करें और वीडि�
     elif not query:
         st.warning("कृपया पहले माइक दबाकर बोलें या कुछ लिखें।")
     else:
-        with st.spinner("YouTube से वीडियो निकालकर 0% से 100% तक पूरी स्क्रिप्ट और टूल्स की सच्चाई जांची जा रही है..."):
-            youtube = build('youtube', 'v3', developerKey=yt_api_key)
-            # AI से बेहतर यूट्यूब सर्च कीवर्ड बनवाना
-            genai.configure(api_key=gemini_api_key)
-            kw_model = genai.GenerativeModel('gemini-2.5-flash')
-            search_kw = kw_model.generate_content(f"Convert this user request into a short 4-5 word YouTube search query in English: {query}").text.strip()
-            
-            search_response = youtube.search().list(q=search_kw, part='snippet', type='video', maxResults=max_videos).execute()
-            passed_count = 0
-            
-            for item in search_response['items']:
-                video_id = item['id']['videoId']
-                title = item['snippet']['title']
-                url = f"https://youtube.com{video_id}"
+        try:
+            with st.spinner("YouTube से वीडियो निकालकर 0% से 100% तक पूरी स्क्रिप्ट और टूल्स की सच्चाई जांची जा रही है..."):
+                youtube = build('youtube', 'v3', developerKey=yt_api_key)
+                model = get_working_model(gemini_api_key)
                 
-                transcript = get_transcript(video_id)
-                if transcript:
-                    check = strict_verify_video(query, transcript, gemini_api_key)
-                    if "RESULT: PASS" in check:
-                        passed_count += 1
-                        tools = check.split("TOOLS:")[1].split("REPORT:")[0].strip() if "TOOLS:" in check else ""
-                        report = check.split("REPORT:")[1].strip() if "REPORT:" in check else ""
-                        
-                        st.success(f"✅ **100% वेरिफाइड वीडियो:** {title}")
-                        st.write(f"🛠️ **बताए गए टूल्स:** {tools}")
-                        st.write(f"📋 **सच्चाई की रिपोर्ट:** {report}")
-                        st.markdown(f"[👉 यहाँ क्लिक करके वीडियो देखें]({url})")
-                        st.divider()
-                        
-            if passed_count == 0:
-                st.error("❌ जांचे गए किसी भी वीडियो में 0% से 100% तक आपकी शर्तें पूरी नहीं हुईं (सबमें या तो अंत में पेड/क्रेडिट का चक्कर था या यूट्यूबर गलत जानकारी दे रहा था)। ऊपर स्लाइडर से वीडियो की संख्या बढ़ाकर फिर से जांचें।")
+                search_kw = model.generate_content(f"Convert this user request into a short 4-5 word YouTube search query in English: {query}").text.strip()
+                search_response = youtube.search().list(q=search_kw, part='snippet', type='video', maxResults=max_videos).execute()
+                passed_count = 0
+                
+                for item in search_response['items']:
+                    video_id = item['id']['videoId']
+                    title = item['snippet']['title']
+                    url = f"https://youtube.com{video_id}"
+                    
+                    transcript = get_transcript(video_id)
+                    if transcript:
+                        check = strict_verify_video(query, transcript, model)
+                        if "RESULT: PASS" in check:
+                            passed_count += 1
+                            parts = check.split("REPORT:")
+                            report = parts[-1].strip() if len(parts) > 1 else ""
+                            tools_part = parts[0].split("TOOLS:")
+                            tools = tools_part[-1].strip() if len(tools_part) > 1 else "नहीं मिला"
+                            
+                            st.success(f"✅ **100% वेरिफाइड वीडियो:** {title}")
+                            st.write(f"🛠️ **बताए गए टूल्स:** {tools}")
+                            st.write(f"📋 **सच्चाई की रिपोर्ट:** {report}")
+                            st.markdown(f"[👉 यहाँ क्लिक करके वीडियो देखें]({url})")
+                            st.divider()
+                            
+                if passed_count == 0:
+                    st.error("❌ जांचे गए किसी भी वीडियो में 0% से 100% तक आपकी शर्तें पूरी नहीं हुईं (सबमें या तो अंत में पेड/क्रेडिट का चक्कर था या यूट्यूबर गलत जानकारी दे रहा था)। ऊपर स्लाइडर से वीडियो की संख्या बढ़ाकर फिर से जांचें।")
+        except Exception as e:
+            st.error(f"कुछ तकनीकी दिक्कत आई है: {str(e)}")
+
