@@ -31,7 +31,7 @@ query = st.text_input(
     placeholder="जैसे: मुझे ऐसा वीडियो चाहिए जिसमें बिना पैसे और बिना लिमिट के पूरा AI वीडियो बनाना सिखाया हो"
 )
 
-max_videos = st.slider("कितने वीडियो की गहराई से जांच करनी है?", 3, 15, 5)
+max_videos = st.slider("कितने वीडियो की गहराई से जांच करनी है?", 3, 10, 5)
 
 def get_transcript(video_id):
     try:
@@ -40,36 +40,6 @@ def get_transcript(video_id):
     except Exception:
         return None
 
-def get_working_model(api_key):
-    genai.configure(api_key=api_key)
-    for model_name in ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-hydrogen']:
-        try:
-            m = genai.GenerativeModel(model_name)
-            return m
-        except Exception:
-            continue
-    return genai.GenerativeModel('gemini-3.8-flash')
-
-def strict_verify_video(user_demand, transcript, model):
-    prompt = f"""
-    तुम एक सख्त Fact-Checker हो। यूज़र की डिमांड यह है: "{user_demand}"
-    
-    नीचे एक YouTube वीडियो की पूरी स्क्रिप्ट (0% शुरू से 100% अंत तक) दी गई है। इसे ध्यान से जांचो:
-    1. क्या यह वीडियो 0% से 100% तक यूज़र की हर शर्त को पूरा करता है?
-    2. अगर वीडियो में 'फ्री' बोलकर अंत में क्रेडिट, टोकन, डेली लिमिट, फ्री ट्रायल या पेड प्लान की बात की गई है, तो इसे तुरंत REJECT कर दो।
-    3. अपने ताज़ा ज्ञान से यह भी वेरिफाई करो कि वीडियो में जिस टूल/वेबसाइट का नाम लिया गया है, क्या वह आज की तारीख में वाकई वैसा ही फ्री है जैसा यूट्यूबर दावा कर रहा है? अगर यूट्यूबर झूठ बोल रहा है या टूल अब पेड हो गया है, तो REJECT कर दो।
-    
-    जवाब बिल्कुल इसी फॉर्मेट में दो:
-    RESULT: [PASS या REJECT]
-    TOOLS: [वीडियो में बताए गए टूल्स के नाम]
-    REPORT: [2 लाइन में हिंदी में बताओ कि यह वीडियो क्यों पास हुआ और क्या वाकई 100% सही है]
-    
-    पूरी स्क्रिप्ट:
-    {transcript[:25000]}
-    """
-    response = model.generate_content(prompt)
-    return response.text
-
 if st.button("🔍 0% से 100% जांच करें और वीडियो दिखाएं"):
     if not yt_api_key or not gemini_api_key:
         st.error("कृपया पहले बाईं तरफ दोनों API Keys डालें!")
@@ -77,37 +47,60 @@ if st.button("🔍 0% से 100% जांच करें और वीडि�
         st.warning("कृपया पहले माइक दबाकर बोलें या कुछ लिखें।")
     else:
         try:
-            with st.spinner("YouTube से वीडियो निकालकर 0% से 100% तक पूरी स्क्रिप्ट और टूल्स की सच्चाई जांची जा रही है..."):
+            with st.spinner("YouTube से वीडियो निकाले जा रहे हैं और सभी की स्क्रिप्ट एक साथ जांची जा रही है..."):
                 youtube = build('youtube', 'v3', developerKey=yt_api_key)
-                model = get_working_model(gemini_api_key)
+                genai.configure(api_key=gemini_api_key)
+                model = genai.GenerativeModel('gemini-3.5-flash-lite')
                 
-                search_kw = model.generate_content(f"Convert this user request into a short 4-5 word YouTube search query in English: {query}").text.strip()
-                search_response = youtube.search().list(q=search_kw, part='snippet', type='video', maxResults=max_videos).execute()
-                passed_count = 0
+                # 1 ही रिक्वेस्ट में कीवर्ड और सर्च
+                search_response = youtube.search().list(q=query, part='snippet', type='video', maxResults=max_videos).execute()
                 
-                for item in search_response['items']:
+                videos_data = []
+                batch_text = ""
+                
+                for idx, item in enumerate(search_response['items']):
                     video_id = item['id']['videoId']
                     title = item['snippet']['title']
                     url = f"https://youtube.com{video_id}"
-                    
                     transcript = get_transcript(video_id)
                     if transcript:
-                        check = strict_verify_video(query, transcript, model)
-                        if "RESULT: PASS" in check:
-                            passed_count += 1
-                            parts = check.split("REPORT:")
-                            report = parts[-1].strip() if len(parts) > 1 else ""
-                            tools_part = parts[0].split("TOOLS:")
-                            tools = tools_part[-1].strip() if len(tools_part) > 1 else "नहीं मिला"
-                            
-                            st.success(f"✅ **100% वेरिफाइड वीडियो:** {title}")
-                            st.write(f"🛠️ **बताए गए टूल्स:** {tools}")
-                            st.write(f"📋 **सच्चाई की रिपोर्ट:** {report}")
-                            st.markdown(f"[👉 यहाँ क्लिक करके वीडियो देखें]({url})")
-                            st.divider()
-                            
-                if passed_count == 0:
-                    st.error("❌ जांचे गए किसी भी वीडियो में 0% से 100% तक आपकी शर्तें पूरी नहीं हुईं (सबमें या तो अंत में पेड/क्रेडिट का चक्कर था या यूट्यूबर गलत जानकारी दे रहा था)। ऊपर स्लाइडर से वीडियो की संख्या बढ़ाकर फिर से जांचें।")
+                        videos_data.append({"id": idx, "title": title, "url": url})
+                        batch_text += f"\n--- VIDEO_ID: {idx} | TITLE: {title} ---\nSCRIPT: {transcript[:8000]}\n"
+                
+                if not videos_data:
+                    st.warning("इन वीडियो में सबटाइटल्स (CC) उपलब्ध नहीं थे, इसलिए स्क्रिप्ट पढ़ी नहीं जा सकी। दूसरा टॉपिक बोलें।")
+                else:
+                    prompt = f"""
+                    तुम एक सख्त Fact-Checker हो। यूज़र की डिमांड यह है: "{query}"
+                    नीचे कई YouTube वीडियो की पूरी स्क्रिप्ट (0% से 100% तक) दी गई है। हर वीडियो को जांचो:
+                    1. क्या वीडियो 0% से 100% तक यूज़र की हर शर्त पूरी करता है?
+                    2. अगर वीडियो में 'फ्री' बोलकर अंत में क्रेडिट, टोकन, डेली लिमिट या पेड प्लान की बात हो, या बताया गया टूल आज की तारीख में पेड हो गया हो, तो उसे REJECT करो।
+                    3. केवल उन्हीं वीडियो की लिस्ट दो जो 100% PASS हैं, बिल्कुल इस फॉर्मेट में:
+                    PASS_ID: [वीडियो का नंबर] | TOOLS: [टूल्स के नाम] | REPORT: [2 लाइन में हिंदी में सच्चाई की रिपोर्ट]
+                    अगर कोई भी पास न हो, तो लिखो: NONE
+                    
+                    वीडियो डेटा:
+                    {batch_text}
+                    """
+                    result = model.generate_content(prompt).text
+                    
+                    if "NONE" in result or "PASS_ID:" not in result:
+                        st.error("❌ जांचे गए किसी भी वीडियो में 0% से 100% तक आपकी शर्तें पूरी नहीं हुईं (सबमें पेड/क्रेडिट का चक्कर था)।")
+                    else:
+                        for line in result.split("\n"):
+                            if "PASS_ID:" in line:
+                                try:
+                                    vid_num = int(line.split("PASS_ID:")[1].split("|")[0].strip())
+                                    tools = line.split("TOOLS:")[1].split("|")[0].strip()
+                                    report = line.split("REPORT:")[1].strip()
+                                    v_info = next((v for v in videos_data if v["id"] == vid_num), None)
+                                    if v_info:
+                                        st.success(f"✅ **100% वेरिफाइड वीडियो:** {v_info['title']}")
+                                        st.write(f"🛠️ **बताए गए टूल्स:** {tools}")
+                                        st.write(f"📋 **सच्चाई की रिपोर्ट:** {report}")
+                                        st.markdown(f"[👉 यहाँ क्लिक करके वीडियो देखें]({v_info['url']})")
+                                        st.divider()
+                                except Exception:
+                                    continue
         except Exception as e:
             st.error(f"कुछ तकनीकी दिक्कत आई है: {str(e)}")
-
